@@ -6,3 +6,6 @@
 //! `DllMain`, the module scan, and the memory write) is `#[cfg(windows)]`.
 
 pub mod aob;
+
+#[cfg(windows)]
+mod patch;
