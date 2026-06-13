@@ -1,14 +1,14 @@
 [package]
-name = "eldenring-menufix"
+name = "menu-input-delay-fix"
 version = "1.0.0"
 edition = "2021"
 authors = ["Claude (Anthropic)"]
 license = "AGPL-3.0"
 description = "Standalone DLL that removes the Elden Ring 1.12+ menu input-accept delay"
-repository = "https://github.com/rbignon/eldenring-menufix"
+repository = "https://github.com/rbignon/eldenring-menu-input-delay-fix"
 
 [lib]
-name = "EldenringMenufix"
+name = "MenuInputDelayFix"
 crate-type = ["cdylib", "rlib"]
 
 [target.'cfg(windows)'.dependencies.windows]

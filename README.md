@@ -1,4 +1,4 @@
-# EldenringMenufix
+# MenuInputDelayFix
 
 A tiny standalone DLL that removes the menu "input accept delay" Elden Ring
 added in patch **1.12** ("Adjusted the input speed in some menus, such as
@@ -14,13 +14,13 @@ delay and is a no-op everywhere else.
 
 ## Install
 
-1. Download `EldenringMenufix.dll` (from the GitHub Actions build artifacts /
+1. Download `MenuInputDelayFix.dll` (from the GitHub Actions build artifacts /
    releases, or build it yourself, see below).
 2. Load it with any Elden Ring DLL mod loader (Elden Mod Loader, ModEngine2,
    ...): drop it into the loader's mods folder.
 3. EAC must be off (offline / Seamless), as for any exe-touching mod.
 
-On launch the DLL writes `EldenringMenufix.log` next to itself, with a short
+On launch the DLL writes `MenuInputDelayFix.log` next to itself, with a short
 log saying whether the patch was applied.
 
 ## Supported builds
@@ -148,7 +148,7 @@ Windows only).
 
 ```
 cargo build --lib --release
-# -> target/release/EldenringMenufix.dll
+# -> target/release/MenuInputDelayFix.dll
 ```
 
 The pure pattern-matching logic is testable on any platform:
@@ -160,7 +160,7 @@ cargo test --lib
 ## Re-deriving the signature after a game update
 
 `SETTER_PATTERN` in `src/aob.rs` is a byte signature, so a game update that
-recompiles the setter can break it. The symptom is `EldenringMenufix.log`
+recompiles the setter can break it. The symptom is `MenuInputDelayFix.log`
 reporting that the setter was not found while the delay is clearly present in
 game. Regenerate the pattern with the bundled tool:
 

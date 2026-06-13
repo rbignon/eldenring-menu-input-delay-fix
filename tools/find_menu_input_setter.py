@@ -6,7 +6,7 @@
 """Locate the Elden Ring "menu input-accept delay" setter on any game build, and
 emit the Rust `SETTER_PATTERN` the mod needs.
 
-Run it when a game update makes EldenringMenufix.log report that the setter was
+Run it when a game update makes MenuInputDelayFix.log report that the setter was
 not found (the runtime AOB in `src/aob.rs` no longer matches).
 The tool finds the setter again, prints a ready-to-paste `SETTER_PATTERN`, and
 can optionally produce a statically patched exe. Standalone: `uv run` pulls

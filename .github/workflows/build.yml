@@ -48,6 +48,6 @@ jobs:
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:
-          name: EldenringMenufix-v${{ steps.version.outputs.version }}
-          path: target/release/EldenringMenufix.dll
+          name: MenuInputDelayFix-v${{ steps.version.outputs.version }}
+          path: target/release/MenuInputDelayFix.dll
           if-no-files-found: error

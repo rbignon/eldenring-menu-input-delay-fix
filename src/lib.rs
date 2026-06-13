@@ -1,4 +1,4 @@
-//! EldenringMenufix: a standalone DLL that removes the Elden Ring 1.12+ menu
+//! MenuInputDelayFix: a standalone DLL that removes the Elden Ring 1.12+ menu
 //! input-accept delay ("prevent accidental skips") by reverting the per-dialog
 //! threshold setter to its inert 1.11 form. See `README.md`.
 //!
@@ -62,7 +62,7 @@ fn describe(outcome: &InstallOutcome) -> String {
     }
 }
 
-/// Write the startup outcome to `EldenringMenufix.log` next to the DLL,
+/// Write the startup outcome to `MenuInputDelayFix.log` next to the DLL,
 /// truncating any previous run. Best-effort: I/O errors are ignored (the patch
 /// outcome is unaffected by whether the log was written).
 #[cfg(windows)]
@@ -70,10 +70,10 @@ fn write_log(hmodule: HINSTANCE, outcome: &InstallOutcome) {
     let Some(dir) = dll_directory(hmodule) else {
         return;
     };
-    let Ok(mut file) = File::create(dir.join("EldenringMenufix.log")) else {
+    let Ok(mut file) = File::create(dir.join("MenuInputDelayFix.log")) else {
         return;
     };
-    let _ = writeln!(file, "EldenringMenufix loaded.");
+    let _ = writeln!(file, "MenuInputDelayFix loaded.");
     let _ = writeln!(file, "{}", describe(outcome));
 }
 
