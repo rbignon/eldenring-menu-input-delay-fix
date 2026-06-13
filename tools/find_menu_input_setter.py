@@ -21,23 +21,28 @@ WHAT THIS TARGETS (background: README.md)
         push rbx
         sub  rsp, 0x20
         mov  rbx, rcx                ; rbx = this (the window-desc)
-        call <delay_getter>          ; obfuscated trampoline, returns ~0.32 (s)
+        call <getter>                ; MenuMan.MenuOpenPadBlockTime debug-property
+                                     ; getter (jmp thunk), returns ~0.32 (s)
         movss [rbx+0x18], xmm0        ; writes the threshold into the desc
         mov  rax, rbx
         add  rsp, 0x20
         pop  rbx
         ret
 
-  The mod restores the 1.11 stub (`mov rax,rcx; ret`, bytes 48 8B C1 C3) over the
-  setter's first 4 bytes, which zeroes the threshold for every dialog.
+  The mod restores the pre-1.12 stub (`mov rax,rcx; ret`, bytes 48 8B C1 C3) over
+  the setter's first 4 bytes, which zeroes the threshold for every dialog.
+  Shortcut for a fresh version: the property name string `MenuOpenPadBlockTime`
+  (UTF-16) is new in 1.12, so a string-table diff against a pre-1.12 build points
+  straight at it.
 
 HOW IT FINDS THE SETTER (two methods that cross-check)
   A. AOB (fast): the known byte signature of the active-delay setter (the same
      one the mod embeds). Matches only builds that HAVE the delay.
   B. Semantic (robust, register/offset/byte agnostic): scan small (<0x30) .pdata
      functions for the shape `T* setX(T* this){ this->field = getter(); return
-     this; }` whose callee entry is a `jmp` (obfuscation trampoline). On builds
-     with the delay this yields exactly one function; on builds without it, zero.
+     this; }` whose callee entry is a `jmp` thunk into the obfuscated debug-
+     property accessor. On builds with the delay this yields exactly one
+     function; on builds without it, zero.
      If the compiler changes the exact bytes (the AOB drifts), B still finds it,
      and `--emit-rust` rebuilds the AOB from the bytes it actually found.
 

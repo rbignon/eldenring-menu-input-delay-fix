@@ -25,24 +25,27 @@ log saying whether the patch was applied.
 
 ## Supported builds
 
-Validated on **1.13** and **1.16.2**. On a build without the delay (e.g. 1.10 /
-ProductVersion 2.0.1.0) the signature does not match and the DLL does nothing,
-by design.
+Validated in-game on **1.13** and **1.16.2**; the AOB also matches **1.12**
+statically. On a build without the delay (pre-1.12, ProductVersion 2.0.x) the
+signature does not match and the DLL does nothing, by design.
 
 ## The mechanism (reverse-engineering writeup)
 
 ### TL;DR
 
 Patch 1.12 added a per-dialog input-accept delay (~0.32 s) before a yes/no box
-accepts confirm. The whole gate already existed in 1.10 but was **inert**: the
+accepts confirm. The whole gate already existed pre-1.12 but was **inert**: the
 function that writes the delay into the dialog template was an empty stub
 (`mov rax,rcx; ret`). 1.12 just **filled in the stub body** so it now sets the
-threshold from a value returned by an Arxan-virtualised getter (~0.32, never a
-visible constant).
+threshold from the debug property **`MenuMan.MenuOpenPadBlockTime`** (~0.32, via
+its getter; the value lives in a `.data` global, not a `.rdata` constant). That
+property's UTF-16 name string is new in 1.12, so a string-table diff against an
+older build is the fastest way to find it.
 
 Per-frame, the dialog accumulates `dt` into `+0x2300` capped at threshold
 `+0x1278`; vtable **slot 18** releases input to the Scaleform movie once
-`accum >= threshold`. Threshold 0 means accept on frame 1 (the 1.10 behaviour).
+`accum >= threshold`. Threshold 0 means accept on frame 1 (the pre-1.12
+behaviour).
 
 Removal = make the threshold stay 0. One AOB hits the setter on every
 delay-active build:
@@ -52,7 +55,7 @@ delay-active build:
 ```
 
 Overwrite the setter's first 4 bytes with `48 8B C1 C3` (`mov rax,rcx; ret`,
-the 1.10 form). That is exactly what this DLL does at startup.
+the pre-1.12 form). That is exactly what this DLL does at startup.
 
 ### Mechanism (reconstructed)
 
@@ -60,7 +63,7 @@ the 1.10 form). That is exactly what this DLL does at startup.
 menus) carries two floats:
 
 ```
-dialog + 0x1278   inputAcceptDelay   (threshold, seconds)   <- 0.32 on 1.12+, 0 on 1.10
+dialog + 0x1278   inputAcceptDelay   (threshold, seconds)   <- 0.32 on 1.12+, 0 pre-1.12
 dialog + 0x2300   elapsedSinceOpen   (accumulator, reset to 0 on open)
 ```
 
@@ -89,10 +92,10 @@ The dialog copies it from a window descriptor (template) at creation:
 called from two pre-existing sites: the message-box template init (all yes/no
 popups), and the menu id 0xb open path (conversation menus).
 
-### The actual 1.10 -> 1.12 change
+### The actual pre-1.12 -> 1.12 change
 
 ```asm
-; 1.10  eldenring.exe+77D560   (empty stub: writes nothing, threshold stays 0)
+; pre-1.12  eldenring.exe+77D560   (empty stub: writes nothing, threshold stays 0)
 mov  rax, rcx
 ret
 
@@ -100,7 +103,7 @@ ret
 push rbx
 sub  rsp, 0x20
 mov  rbx, rcx                   ; self (window desc)
-call <getMenuInputAcceptDelay>  ; -> xmm0  (~0.32; Arxan-virtualised, entry = jmp into stub region)
+call <MenuOpenPadBlockTime getter>  ; -> xmm0 (~0.32; debug-property getter, entry = jmp thunk)
 movss [rbx+0x18], xmm0          ; desc->inputAcceptDelay = ...
 mov  rax, rbx
 add  rsp, 0x20
@@ -111,14 +114,19 @@ ret
 That is the whole patch: a pre-shipped empty hook stub, filled in 1.12. The
 mechanism (accumulator/threshold/slot18/copy) is byte-identical across versions
 modulo offset shifts. The delay value is not a `.rdata` constant or an
-immediate; it is produced by the virtualised getter, so it is invisible to
-static constant scans.
+immediate; it is the `MenuMan.MenuOpenPadBlockTime` debug property, read from a
+`.data` backing global via the getter (e.g. `eldenring.exe+4588BDC` on 1.16.2:
+0 on disk, ~0.32 at runtime). That global is thread-local and lazily populated
+(filled on first read) from the property's registered default, which lives in
+the Arxan-scattered getter/registration code, hence no clean constant to scan
+for. None of this matters for the fix: the setter patch keeps the desc threshold
+at 0, so the property machinery never feeds a non-zero value into a dialog.
 
 ### Per-version reference
 
 | App ver | ProductVersion | Setter RVA | `movss` store RVA | Getter RVA |
 |---|---|---|---|---|
-| 1.10 | 2.0.1.0 | `+77D560` (stub, no delay) | - | - |
+| 1.11 (pre-1.12) | 2.0.1.0 | `+77D560` (stub, no delay) | - | - |
 | 1.12 | 2.2.0.0 | `+78DDE0` | `+78DDEE` | `+E55C70` |
 | 1.13 | 2.3.0.0 | `+78DFD0` | `+78DFDE` | `+E56180` |
 | 1.16.2 | 2.6.2.0 | `+78E0C0` | `+78E0CE` | `+E56060` |
@@ -140,6 +148,11 @@ The setter runs at dialog-template creation, so a single startup patch affects
 every dialog opened afterward. It fails safe: if the module info is
 unavailable, the AOB is missing, the match is not unique, or the write fails,
 it logs and the game runs unpatched.
+
+The menu code is plaintext in memory (not in the DRM-encrypted set) and is not
+restored by the anti-tamper layer on the validated builds, so a one-shot byte
+patch sticks. If a future build is observed reverting the patch, neutralize the
+relevant Arxan code-restoration routine before writing.
 
 ## Build from source
 
@@ -179,15 +192,22 @@ The tool finds the setter two independent ways and requires them to agree:
   that actually have the delay.
 - Method B (semantic): scans small `.pdata` functions for the setter's shape, a
   `T* set(T* this) { this->field = getter(); return this; }` whose getter entry
-  is an obfuscation `jmp` trampoline. Being register/offset/byte agnostic, it
-  still finds the setter after the exact bytes drift, and rebuilds the AOB from
-  what it found.
+  is a `jmp` thunk into the obfuscated debug-property accessor. Being
+  register/offset/byte agnostic, it still finds the setter after the exact bytes
+  drift, and rebuilds the AOB from what it found.
+
+Shortcut for a fresh version: the property name string `MenuOpenPadBlockTime`
+(UTF-16) is new in 1.12, so diffing the string tables against a pre-1.12 build
+points straight at it.
 
 `--patch stub` (recommended) or `--patch nop` additionally writes a statically
 patched copy of the exe, handy for isolating the behaviour outside the DLL.
 
 ## Credits and license
 
-Reverse-engineered by **Claude Fable 5** (Anthropic), run via Claude Code.
+Reverse-engineered by **Claude Fable 5** (Anthropic), run via Claude Code, with
+dynamic confirmation (Cheat Engine) and the runtime mod by the project author.
+The debug-property name `MenuMan.MenuOpenPadBlockTime` was identified by the
+Souls modding community.
 
 Licensed under **AGPL-3.0**. See [`LICENSE`](LICENSE).
