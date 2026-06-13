@@ -14,7 +14,7 @@ use windows::Win32::System::Memory::{
 use windows::Win32::System::ProcessStatus::{GetModuleInformation, MODULEINFO};
 use windows::Win32::System::Threading::GetCurrentProcess;
 
-use crate::aob::{find_unique, SETTER_PATTERN, STUB};
+use crate::aob::{executable_section_ranges, find_unique_in_regions, SETTER_PATTERN, STUB};
 
 /// Result of an install attempt. Carries no I/O; the entry layer logs it.
 #[derive(Debug, Clone)]
@@ -92,18 +92,25 @@ fn compute_install() -> InstallOutcome {
     }
     // SAFETY: `base`/`size` come from `GetModuleInformation`; the OS keeps the
     // image mapped for the process lifetime, so the range is valid for reads.
-    // The shared borrow `mem` lives only for the `find_unique` scan and is
-    // dropped before `patch_bytes` (which takes a raw `usize`), so no mutable
-    // alias of these bytes exists while `mem` is held.
+    // The shared borrow `mem` lives only for the scan and is dropped before
+    // `patch_bytes` (which takes a raw `usize`), so no mutable alias of these
+    // bytes exists while `mem` is held.
     let mem = unsafe { std::slice::from_raw_parts(base as *const u8, size) };
-    match find_unique(mem, SETTER_PATTERN) {
+    // Scan only executable sections (avoids a stray pattern hit in data). If the
+    // PE headers do not parse, fall back to the whole image so we never regress
+    // to "cannot find it".
+    let mut regions = executable_section_ranges(mem);
+    if regions.is_empty() {
+        regions.push((0, size));
+    }
+    match find_unique_in_regions(mem, &regions, SETTER_PATTERN) {
         Ok(off) => {
             let addr = base + off;
-            // SAFETY: `addr = base + off`, and `find_unique` guarantees
-            // `off + SETTER_PATTERN.len() <= size`; since `STUB.len()` (4) is
-            // less than `SETTER_PATTERN.len()` (28), the 4-byte write lies
-            // wholly inside the mapped image. STUB is valid x86-64
-            // (`mov rax,rcx; ret`) that replaces the prologue.
+            // SAFETY: `addr = base + off`, and `find_unique_in_regions`
+            // guarantees `off + SETTER_PATTERN.len() <= region_end <= size`;
+            // since `STUB.len()` (4) is less than `SETTER_PATTERN.len()` (28),
+            // the 4-byte write lies wholly inside the mapped image. STUB is
+            // valid x86-64 (`mov rax,rcx; ret`) that replaces the prologue.
             match unsafe { patch_bytes(addr, &STUB) } {
                 Ok(()) => InstallOutcome::Patched { addr },
                 Err(e) => InstallOutcome::WriteFailed(e.to_string()),
