@@ -6,44 +6,42 @@
 /// One byte of an AOB pattern: `Some(b)` matches exactly, `None` is a wildcard.
 pub type PatternByte = Option<u8>;
 
-/// AOB of the 1.12+ threshold setter. `None` wildcards the call rel32
-/// (bytes 10-13) and the destination field disp8 (byte 18), so the pattern
-/// survives those varying across builds. Matches exactly one function on builds
-/// with the delay (validated 1.12, 1.13); does not match the inert 1.11 form.
+/// AOB of the 1.12+ threshold setter, anchored on its semantic core
+/// `call <getter>; movss [rbx+0x18],xmm0; mov rax,rbx` (store the delay into the
+/// window-desc, then return-this). Only the 4 call-rel32 bytes are wildcarded.
+///
+/// The field offset `0x18` is kept literal on purpose: it is what makes the
+/// pattern unique AND what distinguishes a delay build from the inert pre-1.12
+/// stub. Wildcarding it matches unrelated `movss [rbx+disp],xmm0` getters,
+/// including several on no-delay builds (measured: 4-5 hits vs 0/1).
+///
+/// Deliberately excludes the function prologue/epilogue and stack-frame sizes
+/// (`sub rsp,0x20` / `add rsp,0x20`): those drift whenever the function's callers
+/// or callees change, which is the most likely future break (thanks to
+/// thefifthmatt for the review). Matches exactly one function on builds with the
+/// delay (1.12 / 1.13 / 1.16.2); zero on pre-1.12.
 pub const SETTER_PATTERN: &[PatternByte] = &[
-    Some(0x40),
-    Some(0x53),
-    Some(0x48),
-    Some(0x83),
-    Some(0xEC),
-    Some(0x20),
-    Some(0x48),
-    Some(0x8B),
-    Some(0xD9),
-    Some(0xE8),
+    Some(0xE8), // call <getter>
     None,
     None,
     None,
     None,
-    Some(0xF3),
+    Some(0xF3), // movss [rbx+0x18], xmm0
     Some(0x0F),
     Some(0x11),
     Some(0x43),
-    None,
-    Some(0x48),
+    Some(0x18),
+    Some(0x48), // mov rax, rbx
     Some(0x8B),
-    Some(0xC3),
-    Some(0x48),
-    Some(0x83),
-    Some(0xC4),
-    Some(0x20),
-    Some(0x5B),
     Some(0xC3),
 ];
 
-/// `mov rax, rcx ; ret` -- the inert 1.11 stub. Overwrites the first 4 bytes
-/// of the setter prologue, which zeroes the threshold for every dialog.
-pub const STUB: [u8; 4] = [0x48, 0x8B, 0xC1, 0xC3];
+/// `xorps xmm0, xmm0 ; nop ; nop` -- overwrites the 5-byte `call <getter>` at the
+/// start of a [`SETTER_PATTERN`] match. xmm0 becomes 0 before the following
+/// `movss [rbx+0x18],xmm0`, so the desc threshold is written as 0 for every
+/// dialog (and the getter is never invoked). 5 bytes in, 5 bytes out;
+/// independent of the field offset and base register.
+pub const CALL_PATCH: [u8; 5] = [0x0F, 0x57, 0xC0, 0x90, 0x90];
 
 /// True if `pattern` matches `haystack` starting at `offset`.
 /// Caller guarantees `offset + pattern.len() <= haystack.len()`.
@@ -309,24 +307,34 @@ mod tests {
     }
 
     /// The pattern must discriminate a delay-active (1.12+) setter from the
-    /// inert 1.11 stub form. This fails if the pattern is edited so it no
-    /// longer distinguishes the two, which is the property the mod relies on.
+    /// inert pre-1.12 stub form, and it relies on the literal field offset 0x18.
+    /// This fails if the pattern is edited so it no longer distinguishes them,
+    /// which is the property the mod relies on.
     #[test]
     fn setter_pattern_matches_active_setter_only() {
-        // 1.12+ setter body: prologue, call <getter> (rel32 filled), then
-        // `movss [rbx+0x18],xmm0`, epilogue. Matches SETTER_PATTERN exactly.
+        // Full 1.12+ setter body. The pattern anchors on the call+store core, so
+        // it matches at the `call` (offset 9), not the function start.
         let active = [
             0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, // push;sub;mov rbx,rcx
             0xE8, 0x11, 0x22, 0x33, 0x44, // call rel32 (arbitrary)
             0xF3, 0x0F, 0x11, 0x43, 0x18, // movss [rbx+0x18],xmm0
             0x48, 0x8B, 0xC3, 0x48, 0x83, 0xC4, 0x20, 0x5B, 0xC3, // mov rax,rbx;add;pop;ret
         ];
-        assert_eq!(find_unique(&active, SETTER_PATTERN), Ok(0));
+        assert_eq!(find_unique(&active, SETTER_PATTERN), Ok(9));
 
-        // 1.11 inert stub form: `mov rax,rcx; ret` followed by padding. Long
-        // enough for the scan to attempt every offset; must not match.
+        // Inert pre-1.12 stub (`mov rax,rcx; ret`) + padding: must not match.
         let mut inert = vec![0xCCu8; 64];
-        inert[..STUB.len()].copy_from_slice(&STUB);
+        inert[..4].copy_from_slice(&[0x48, 0x8B, 0xC1, 0xC3]);
         assert_eq!(find_first(&inert, SETTER_PATTERN), None);
+
+        // 0x18 is load-bearing: the same core storing to a different field
+        // (`[rbx+0x20]`) must NOT match. Wildcarding the offset would hit
+        // unrelated getters, including on no-delay builds.
+        let other_field = [
+            0xE8, 0x11, 0x22, 0x33, 0x44, // call rel32
+            0xF3, 0x0F, 0x11, 0x43, 0x20, // movss [rbx+0x20],xmm0
+            0x48, 0x8B, 0xC3, // mov rax,rbx
+        ];
+        assert_eq!(find_first(&other_field, SETTER_PATTERN), None);
     }
 }

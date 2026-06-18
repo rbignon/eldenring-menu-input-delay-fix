@@ -29,8 +29,11 @@ WHAT THIS TARGETS (background: README.md)
         pop  rbx
         ret
 
-  The mod restores the pre-1.12 stub (`mov rax,rcx; ret`, bytes 48 8B C1 C3) over
-  the setter's first 4 bytes, which zeroes the threshold for every dialog.
+  The mod neutralizes the getter `call` (bytes E8 ?? ?? ?? ??) with
+  `xorps xmm0,xmm0; nop; nop` (0F 57 C0 90 90), so the following movss writes 0
+  into the threshold for every dialog. The AOB anchors on that call+store core
+  (not the prologue/stack frame, which drift); the literal field offset 0x18 is
+  kept because it is what makes the pattern unique.
   Shortcut for a fresh version: the property name string `MenuOpenPadBlockTime`
   (UTF-16) is new in 1.12, so a string-table diff against a pre-1.12 build points
   straight at it.
@@ -50,9 +53,9 @@ HOW IT FINDS THE SETTER (two methods that cross-check)
 
 USAGE
   uv run tools/find_menu_input_setter.py <eldenring.exe>            # locate + emit
-  uv run tools/find_menu_input_setter.py <eldenring.exe> --patch stub
+  uv run tools/find_menu_input_setter.py <eldenring.exe> --patch call
   uv run tools/find_menu_input_setter.py <eldenring.exe> --patch nop -o out.exe
-  uv run tools/find_menu_input_setter.py <eldenring.exe> --patch stub --inplace
+  uv run tools/find_menu_input_setter.py <eldenring.exe> --patch call --inplace
 """
 
 import argparse
@@ -66,38 +69,27 @@ _md = Cs(CS_ARCH_X86, CS_MODE_64)
 _md.detail = True
 
 # ---- method A: precise byte signature (kept in sync with the Rust mod) -------
+# Core only: call <getter>; movss [rbx+0x18],xmm0; mov rax,rbx. Wildcards just
+# the call rel32. Excludes the prologue/epilogue and stack-frame sizes (those
+# drift when callers/callees change); keeps the literal 0x18 (load-bearing for
+# uniqueness and for discriminating a delay build).
 SIG = [
-    0x40,
-    0x53,
-    0x48,
-    0x83,
-    0xEC,
-    0x20,
-    0x48,
-    0x8B,
-    0xD9,
-    0xE8,
+    0xE8,  # call <getter>
     None,
     None,
     None,
     None,
-    0xF3,
+    0xF3,  # movss [rbx+0x18], xmm0
     0x0F,
     0x11,
     0x43,
-    None,
-    0x48,
+    0x18,
+    0x48,  # mov rax, rbx
     0x8B,
     0xC3,
-    0x48,
-    0x83,
-    0xC4,
-    0x20,
-    0x5B,
-    0xC3,
 ]
-SIG_MOVSS_OFF = 14  # movss store within the AOB match (5 bytes)
-STUB = bytes([0x48, 0x8B, 0xC1, 0xC3])  # mov rax,rcx ; ret
+SIG_MOVSS_OFF = 5  # movss store within the AOB match (call is 5 bytes)
+CALL_PATCH = bytes([0x0F, 0x57, 0xC0, 0x90, 0x90])  # xorps xmm0,xmm0 ; nop ; nop
 
 
 class PE:
@@ -201,51 +193,39 @@ def find_semantic(pe):
 
 
 # ---- emit the Rust SETTER_PATTERN from the bytes actually found -------------
-def emit_rust(pe, rva):
-    """Build a wildcarded `SETTER_PATTERN` for the setter at `rva`.
+def emit_rust(pe, call_rva):
+    """Build the core `SETTER_PATTERN` for the `call` at `call_rva`.
 
-    Wildcards the call's rel32 displacement and the threshold `movss` field
-    displacement (the two operands that move across builds), keeping every
-    opcode/register byte exact. Returns the Rust source for the const, or None
-    if the function does not disassemble to the expected `... call; movss
-    [base+disp],xmm0 ...; ret` shape.
+    Emits the semantic core `call <getter>; movss [reg+disp],xmm0; mov rax,reg`,
+    wildcarding only the 4 call-rel32 bytes and keeping every other byte exact
+    (opcode, register, and the literal field offset, which is load-bearing).
+    Excludes the prologue/epilogue/stack frame. Returns the Rust source for the
+    const, or None if the bytes do not disassemble to that shape.
     """
-    code = bytes(pe.img[rva : rva + 0x40])
-    ins = list(_md.disasm(code, pe.ib + rva))
-    wild = set()
-    end = None
-    saw_call_movss = False
-    for i, x in enumerate(ins):
-        rel = x.address - (pe.ib + rva)
-        enc = x.encoding  # capstone reports the exact field offsets and sizes
-        if x.mnemonic == "call" and enc.imm_size:
-            wild.update(
-                range(rel + enc.imm_offset, rel + enc.imm_offset + enc.imm_size)
-            )
-        if (
-            x.mnemonic == "movss"
-            and enc.disp_size
-            and i >= 1
-            and ins[i - 1].mnemonic == "call"
-        ):
-            ops = x.operands
-            store = (
-                len(ops) == 2
-                and ops[0].type == CS_OP_MEM
-                and ops[0].mem.base != 0
-                and ops[0].mem.index == 0
-            )
-            if store:
-                wild.update(
-                    range(rel + enc.disp_offset, rel + enc.disp_offset + enc.disp_size)
-                )
-                saw_call_movss = True
-        if x.mnemonic == "ret":
-            end = rel + x.size
-            break
-    if end is None or not saw_call_movss:
+    code = bytes(pe.img[call_rva : call_rva + 0x20])
+    ins = list(_md.disasm(code, pe.ib + call_rva))
+    if len(ins) < 3 or ins[0].mnemonic != "call":
         return None
-
+    movss, movr = ins[1], ins[2]
+    store = (
+        movss.mnemonic == "movss"
+        and len(movss.operands) == 2
+        and movss.operands[0].type == CS_OP_MEM
+        and movss.operands[0].mem.base != 0
+        and movss.operands[0].mem.index == 0
+        and movss.reg_name(movss.operands[1].reg) == "xmm0"
+    )
+    base = movss.reg_name(movss.operands[0].mem.base) if store else None
+    returns_this = (
+        movr.mnemonic == "mov"
+        and movr.op_str == f"rax, {base}"
+        if store
+        else False
+    )
+    if not (store and returns_this):
+        return None
+    end = (movr.address + movr.size) - (pe.ib + call_rva)
+    wild = set(range(1, 5))  # the call's rel32 (E8 + 4 bytes)
     entries = ["None" if k in wild else f"Some(0x{code[k]:02X})" for k in range(end)]
     lines = ["const SETTER_PATTERN: &[Option<u8>] = &["]
     for k in range(0, len(entries), 6):
@@ -267,20 +247,22 @@ def main():
         description="Locate/patch the ER menu input-accept delay setter."
     )
     ap.add_argument("exe")
-    ap.add_argument("--patch", choices=["nop", "stub"])
+    ap.add_argument("--patch", choices=["call", "nop"])
     ap.add_argument("-o", "--out")
     ap.add_argument("--inplace", action="store_true")
     args = ap.parse_args()
 
     pe, sem, sem_obf, aob = locate(args.exe)
 
+    # `chosen` is the setter function start (semantic, when known); `chosen_movss`
+    # is the threshold store; the getter `call` is the 5 bytes right before it.
     chosen = None
     chosen_movss = None
     if len(sem_obf) == 1:
         chosen = sem_obf[0][0]
         chosen_movss = sem_obf[0][1]  # true RVA, exact even if the AOB drifted
     elif len(aob) == 1:
-        chosen = aob[0]
+        chosen = aob[0]  # AOB now anchors on the call, not the function start
         chosen_movss = aob[0] + SIG_MOVSS_OFF
 
     print(
@@ -308,24 +290,29 @@ def main():
         )
         sys.exit(3)
 
-    if aob and chosen not in aob:
+    if aob and (chosen_movss - SIG_MOVSS_OFF) not in aob:
         print(
             f"\nWARNING: AOB ({[hex(x) for x in aob]}) and semantic "
-            f"({chosen:#x}) disagree; using semantic. Verify."
+            f"(call {chosen_movss - SIG_MOVSS_OFF:#x}) disagree; using semantic. Verify."
         )
 
     movss = chosen_movss
-    fo_func = pe.file_off(chosen)
+    call_rva = movss - SIG_MOVSS_OFF  # the `call <getter>`, 5 bytes before movss
+    fo_call = pe.file_off(call_rva)
     fo_movss = pe.file_off(movss)
     mb = bytes(pe.img[movss : movss + 5])
     movss_ok = mb[0:3] == b"\xf3\x0f\x11"
+    cb = bytes(pe.img[call_rva : call_rva + 1])
+    call_ok = cb == b"\xe8"
+    setter_str = f"eldenring.exe+{chosen:X}" if chosen is not None else "(unknown)"
     print(
-        f"\nSetter: eldenring.exe+{chosen:X}   movss store: eldenring.exe+{movss:X}"
-        f"  bytes={mb.hex(' ')}{'' if movss_ok else '  (!! unexpected, prefer --patch stub)'}"
+        f"\nSetter fn: {setter_str}   call: eldenring.exe+{call_rva:X}"
+        f"   movss store: eldenring.exe+{movss:X}  bytes={mb.hex(' ')}"
+        f"{'' if movss_ok and call_ok else '  (!! unexpected bytes)'}"
     )
-    print(f"file offsets: setter={fo_func:#x} movss={fo_movss:#x}")
+    print(f"file offsets: call={fo_call:#x} movss={fo_movss:#x}")
 
-    rust = emit_rust(pe, chosen)
+    rust = emit_rust(pe, call_rva)
     if rust:
         print("\nReady-to-paste Rust pattern for src/aob.rs")
         print("(run `cargo fmt` after pasting):\n")
@@ -344,15 +331,16 @@ def main():
 
     with open(args.exe, "rb") as f:
         data = bytearray(f.read())
-    if args.patch == "stub":
-        before = bytes(data[fo_func : fo_func + 4])
-        data[fo_func : fo_func + 4] = STUB
-        what = f"setter+0 {before.hex(' ')} -> {STUB.hex(' ')}  (mov rax,rcx; ret)"
-    else:
+    if args.patch == "call":
+        if not call_ok:
+            print("Refusing --patch call: no E8 call where expected.")
+            sys.exit(4)
+        before = bytes(data[fo_call : fo_call + 5])
+        data[fo_call : fo_call + 5] = CALL_PATCH
+        what = f"call {before.hex(' ')} -> {CALL_PATCH.hex(' ')}  (xorps xmm0,xmm0; nop; nop)"
+    else:  # nop the movss store
         if not movss_ok:
-            print(
-                "Refusing --patch nop: movss bytes not where expected. Use --patch stub."
-            )
+            print("Refusing --patch nop: movss bytes not where expected. Use --patch call.")
             sys.exit(4)
         before = bytes(data[fo_movss : fo_movss + 5])
         data[fo_movss : fo_movss + 5] = b"\x90" * 5

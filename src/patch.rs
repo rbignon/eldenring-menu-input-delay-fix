@@ -1,6 +1,6 @@
 //! Windows-only: locate the menu input-accept delay setter in the live
-//! `eldenring.exe` image and revert it to the inert 1.11 stub. The pure
-//! pattern matching lives in [`crate::aob`].
+//! `eldenring.exe` image and neutralize its getter call so the per-dialog
+//! threshold is written as 0. The pure pattern matching lives in [`crate::aob`].
 
 use std::ffi::c_void;
 use std::sync::OnceLock;
@@ -14,12 +14,12 @@ use windows::Win32::System::Memory::{
 use windows::Win32::System::ProcessStatus::{GetModuleInformation, MODULEINFO};
 use windows::Win32::System::Threading::GetCurrentProcess;
 
-use crate::aob::{executable_section_ranges, find_unique_in_regions, SETTER_PATTERN, STUB};
+use crate::aob::{executable_section_ranges, find_unique_in_regions, CALL_PATCH, SETTER_PATTERN};
 
 /// Result of an install attempt. Carries no I/O; the entry layer logs it.
 #[derive(Debug, Clone)]
 pub enum InstallOutcome {
-    /// Setter found and reverted to the 1.11 stub at `addr`.
+    /// Setter located; the getter call at `addr` was neutralized (xorps xmm0).
     Patched { addr: usize },
     /// No match: build has no delay or the signature drifted.
     NotFound,
@@ -82,7 +82,8 @@ unsafe fn patch_bytes(addr: usize, bytes: &[u8]) -> windows::core::Result<()> {
     Ok(())
 }
 
-/// Locate the setter and revert it. Side-effecting; runs once via [`OUTCOME`].
+/// Locate the setter and neutralize its getter call. Side-effecting; runs once
+/// via [`OUTCOME`].
 fn compute_install() -> InstallOutcome {
     let Some((base, size)) = module_base_and_size() else {
         return InstallOutcome::ModuleInfoFailed;
@@ -105,13 +106,15 @@ fn compute_install() -> InstallOutcome {
     }
     match find_unique_in_regions(mem, &regions, SETTER_PATTERN) {
         Ok(off) => {
+            // `off` is the `call <getter>` at the start of the match.
             let addr = base + off;
             // SAFETY: `addr = base + off`, and `find_unique_in_regions`
             // guarantees `off + SETTER_PATTERN.len() <= region_end <= size`;
-            // since `STUB.len()` (4) is less than `SETTER_PATTERN.len()` (28),
-            // the 4-byte write lies wholly inside the mapped image. STUB is
-            // valid x86-64 (`mov rax,rcx; ret`) that replaces the prologue.
-            match unsafe { patch_bytes(addr, &STUB) } {
+            // since `CALL_PATCH.len()` (5) is less than `SETTER_PATTERN.len()`
+            // (13), the 5-byte write lies wholly inside the mapped image.
+            // CALL_PATCH is valid x86-64 (`xorps xmm0,xmm0; nop; nop`) that
+            // replaces the 5-byte call so the following store writes 0.
+            match unsafe { patch_bytes(addr, &CALL_PATCH) } {
                 Ok(()) => InstallOutcome::Patched { addr },
                 Err(e) => InstallOutcome::WriteFailed(e.to_string()),
             }

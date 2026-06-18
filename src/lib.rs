@@ -1,6 +1,7 @@
 //! MenuInputDelayFix: a standalone DLL that removes the Elden Ring 1.12+ menu
-//! input-accept delay ("prevent accidental skips") by reverting the per-dialog
-//! threshold setter to its inert 1.11 form. See `README.md`.
+//! input-accept delay ("prevent accidental skips") by neutralizing the getter
+//! call in the per-dialog threshold setter, so the threshold is written as 0.
+//! See `README.md`.
 //!
 //! The cross-platform pattern matching lives in [`aob`]; all Win32 work (the
 //! `DllMain`, the module scan, and the memory write) is `#[cfg(windows)]`.
@@ -46,7 +47,7 @@ fn dll_directory(hmodule: HINSTANCE) -> Option<PathBuf> {
 fn describe(outcome: &InstallOutcome) -> String {
     match outcome {
         InstallOutcome::Patched { addr } => {
-            format!("menu input delay removed (setter patched at 0x{addr:X})")
+            format!("menu input delay removed (getter call neutralized at 0x{addr:X})")
         }
         InstallOutcome::NotFound => {
             "setter not found; build has no delay or the signature drifted, running unpatched"

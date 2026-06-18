@@ -6,7 +6,7 @@ conversation menus, to prevent accidental skips"). It restores the pre-1.12
 behavior where yes/no confirmation boxes and conversation menus accept confirm
 instantly.
 
-The fix is a single 4-byte runtime patch (no per-frame work, no hooks). It is
+The fix is a single 5-byte runtime patch (no per-frame work, no hooks). It is
 **always on** and **build-agnostic**: it patches only builds that have the
 delay and is a no-op everywhere else.
 
@@ -47,15 +47,23 @@ Per-frame, the dialog accumulates `dt` into `+0x2300` capped at threshold
 `accum >= threshold`. Threshold 0 means accept on frame 1 (the pre-1.12
 behaviour).
 
-Removal = make the threshold stay 0. One AOB hits the setter on every
-delay-active build:
+Removal = make the threshold stay 0. One AOB hits the setter's call+store core
+on every delay-active build (and nothing on pre-1.12):
 
 ```
-40 53 48 83 EC 20 48 8B D9 E8 ?? ?? ?? ?? F3 0F 11 43 ?? 48 8B C3 48 83 C4 20 5B C3
+E8 ?? ?? ?? ?? F3 0F 11 43 18 48 8B C3
 ```
 
-Overwrite the setter's first 4 bytes with `48 8B C1 C3` (`mov rax,rcx; ret`,
-the pre-1.12 form). That is exactly what this DLL does at startup.
+Overwrite the 5-byte `call <getter>` with `0F 57 C0 90 90`
+(`xorps xmm0,xmm0; nop; nop`): xmm0 becomes 0, so the following
+`movss [rbx+0x18],xmm0` writes 0 into the threshold. That is exactly what this
+DLL does at startup.
+
+The AOB deliberately anchors on the call + store, not the function prologue or
+stack frame (those drift when the function's callers/callees change); the
+literal field offset `0x18` is kept because it is what makes the pattern unique
+and distinguishes a delay build from the pre-1.12 stub. (AOB hardening thanks to
+thefifthmatt.)
 
 ### Mechanism (reconstructed)
 
@@ -103,7 +111,9 @@ ret
 push rbx
 sub  rsp, 0x20
 mov  rbx, rcx                   ; self (window desc)
-call <MenuOpenPadBlockTime getter>  ; -> xmm0 (~0.32; debug-property getter, entry = jmp thunk)
+call <MenuOpenPadBlockTime getter>  ; -> xmm0 (~0.32; debug-property getter, jmp thunk)
+                                ; ^ the DLL overwrites this 5-byte call with
+                                ;   `xorps xmm0,xmm0; nop; nop` so the store writes 0
 movss [rbx+0x18], xmm0          ; desc->inputAcceptDelay = ...
 mov  rax, rbx
 add  rsp, 0x20
@@ -140,9 +150,11 @@ Dialog fields: threshold `+0x1278`, accumulator `+0x2300`. Desc field: `+0x18`.
 `DllMain` spawns a worker thread (no work under the loader lock) that:
 
 1. queries the live `eldenring.exe` module base and size;
-2. AOB-scans the image for the setter, requiring exactly one match;
-3. overwrites its 4-byte prologue with `48 8B C1 C3` (flip the page to RWX,
-   write, restore protection, flush the instruction cache).
+2. AOB-scans the executable sections for the setter's call+store core, requiring
+   exactly one match;
+3. overwrites the 5-byte `call <getter>` at the match with `0F 57 C0 90 90`
+   (`xorps xmm0,xmm0; nop; nop`; flip the page to RWX, write, restore protection,
+   flush the instruction cache).
 
 The setter runs at dialog-template creation, so a single startup patch affects
 every dialog opened afterward. It fails safe: if the module info is
@@ -200,14 +212,16 @@ Shortcut for a fresh version: the property name string `MenuOpenPadBlockTime`
 (UTF-16) is new in 1.12, so diffing the string tables against a pre-1.12 build
 points straight at it.
 
-`--patch stub` (recommended) or `--patch nop` additionally writes a statically
-patched copy of the exe, handy for isolating the behaviour outside the DLL.
+`--patch call` (the runtime patch: call -> `xorps xmm0,xmm0; nop; nop`) or
+`--patch nop` (NOP the `movss` store) additionally writes a statically patched
+copy of the exe, handy for isolating the behaviour outside the DLL.
 
 ## Credits and license
 
 Reverse-engineered by **Claude Fable 5** (Anthropic), run via Claude Code, with
 dynamic confirmation (Cheat Engine) and the runtime mod by the project author.
 The debug-property name `MenuMan.MenuOpenPadBlockTime` was identified by the
-Souls modding community.
+Souls modding community; the more robust call+store AOB and the `xorps` patch
+were suggested by thefifthmatt.
 
 Licensed under **AGPL-3.0**. See [`LICENSE`](LICENSE).
