@@ -20,6 +20,15 @@ delay and is a no-op everywhere else.
    ...): drop it into the loader's mods folder.
 3. EAC must be off (offline / Seamless), as for any exe-touching mod.
 
+**Do not load this DLL together with the Elden Ring Item and Enemy Randomizer
+(or any other mod that ships a recent `RandomizerCrashFix.dll`).** Those builds
+already bundle this exact patch. Both target the same instruction, so whichever
+loads second no longer finds the signature. If `RandomizerCrashFix.dll` patches
+first, this DLL just logs that the setter was not found and runs unpatched
+(harmless); but if this DLL patches first, `RandomizerCrashFix.dll` treats the
+now-missing signature as a fatal "Required addresses ... not found" error and
+aborts, taking its crash fixes down with it. Use only one of the two.
+
 On launch the DLL writes `MenuInputDelayFix.log` next to itself, with a short
 log saying whether the patch was applied.
 
