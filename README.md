@@ -32,6 +32,22 @@ aborts, taking its crash fixes down with it. Use only one of the two.
 On launch the DLL writes `MenuInputDelayFix.log` next to itself, with a short
 log saying whether the patch was applied.
 
+### Antivirus false positives
+
+Expect your antivirus (Microsoft Defender included) to flag the DLL, and your
+browser or SmartScreen to warn on the download. This is a false positive, and
+it is inherent to what the mod does: it scans the game's executable memory and
+patches 5 bytes of code in it, which is exactly what heuristics classify as a
+"game hack" or generic trojan. An unsigned, low-prevalence Rust binary makes
+the generic ML detections (e.g. `Trojan:Win32/Wacatac`) even more likely. If
+your antivirus quarantines the DLL, restore it and add an exclusion for your
+mods folder.
+
+If in doubt, do not trust the binary: the DLL is open source, every release
+binary comes from the public GitHub Actions workflow (the run is visible on
+the repository's Actions tab), and you can audit the source and build it
+yourself (see below).
+
 ## Supported builds
 
 Validated in-game on **1.13** and **1.16.2**; the AOB also matches **1.12**
