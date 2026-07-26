@@ -22,11 +22,30 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Run tests
+        run: cargo test --lib
+
       - name: Build release DLL
         run: cargo build --lib --release
+
+      # The zip and the bare DLL must come from this single build: two builds
+      # of the same source produce different binaries (PE timestamp), and two
+      # hashes in the wild for one version restart Defender reputation twice.
+      # For the same reason, never re-run this workflow for a published tag:
+      # it would replace the assets with a new build and new hashes.
+      - name: Package release assets
+        shell: bash
+        run: |
+          cp target/release/MenuInputDelayFix.dll .
+          7z a "MenuInputDelayFix-${GITHUB_REF_NAME}.zip" MenuInputDelayFix.dll
+          7z l "MenuInputDelayFix-${GITHUB_REF_NAME}.zip"
+          sha256sum MenuInputDelayFix.dll "MenuInputDelayFix-${GITHUB_REF_NAME}.zip" | tee SHA256SUMS.txt
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/MenuInputDelayFix.dll
+          files: |
+            MenuInputDelayFix.dll
+            MenuInputDelayFix-${{ github.ref_name }}.zip
+            SHA256SUMS.txt
           fail_on_unmatched_files: true

@@ -46,7 +46,10 @@ mods folder.
 If in doubt, do not trust the binary: the DLL is open source, every release
 binary comes from the public GitHub Actions workflow (the run is visible on
 the repository's Actions tab), and you can audit the source and build it
-yourself (see below).
+yourself (see below). Releases after v1.1.2 also ship a `SHA256SUMS.txt`
+computed by the same workflow run that built the DLL: for those releases the
+zip and the bare DLL contain the same binary, and you can check your download
+against the hashes printed in the run's log.
 
 ## Supported builds
 
