@@ -57,6 +57,21 @@ computed by the same workflow run that built the DLL: for those releases the
 zip and the bare DLL contain the same binary, and you can check your download
 against the hashes printed in the run's log.
 
+Releases after v1.1.3 go one step further and are attested, so you do not have
+to take any of that on faith. With the [GitHub CLI](https://cli.github.com/)
+2.49 or later installed and signed in (`gh auth login`), run this on the zip or
+on the DLL, whichever you downloaded:
+
+```
+gh attestation verify MenuInputDelayFix-v1.1.4.zip \
+  -R rbignon/eldenring-menu-input-delay-fix \
+  --signer-workflow rbignon/eldenring-menu-input-delay-fix/.github/workflows/release.yml
+```
+
+This proves the file you downloaded is the exact output of that workflow, run
+on a commit of this repository. It is provenance, not code signing: Windows
+does not read it, and it has no effect on antivirus verdicts.
+
 ## Supported builds
 
 Validated in-game on **1.13** and **1.16.2**; the AOB also matches **1.12**

@@ -25,6 +25,32 @@ fn main() {
 
     let repository = std::env::var("CARGO_PKG_REPOSITORY").unwrap();
     let description = std::env::var("CARGO_PKG_DESCRIPTION").unwrap();
+    let license = std::env::var("CARGO_PKG_LICENSE").unwrap();
+    // Cargo separates authors with ':' and allows a "Name <email>" form. These
+    // strings ship inside a binary handed to strangers, so keep the names and
+    // drop the addresses. CompanyName names the publisher, and CI treats it as
+    // the "resources were embedded" sentinel, so an empty one would surface as
+    // a puzzling workflow failure instead of a clear error.
+    let authors = std::env::var("CARGO_PKG_AUTHORS")
+        .unwrap()
+        .split(':')
+        .map(|author| {
+            author
+                .split('<')
+                .next()
+                .unwrap_or(author)
+                .trim()
+                .to_string()
+        })
+        .filter(|author| !author.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(!authors.is_empty(), "Cargo.toml must declare `authors`");
+    let copyright = if license.is_empty() {
+        format!("Copyright (C) 2026 {authors}")
+    } else {
+        format!("Copyright (C) 2026 {authors}, {license}")
+    };
 
     // An assembly identity version must be four numbers. Building it from the
     // components (rather than CARGO_PKG_VERSION) keeps a pre-release version
@@ -66,11 +92,11 @@ fn main() {
         .set("ProductName", "MenuInputDelayFix")
         .set("InternalName", "MenuInputDelayFix.dll")
         .set("OriginalFilename", "MenuInputDelayFix.dll")
-        .set("CompanyName", "Romain Bignon")
-        .set(
-            "LegalCopyright",
-            "Copyright (C) 2026 Romain Bignon, AGPL-3.0",
-        )
+        .set("CompanyName", &authors)
+        // Hardcoded year: deriving it at build time would change the binary
+        // every January for no reason. The license is empty when Cargo.toml
+        // uses `license-file` instead of `license`.
+        .set("LegalCopyright", &copyright)
         .set(
             "Comments",
             &format!("Free software, source at {repository}"),
