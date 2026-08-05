@@ -11,6 +11,12 @@ repository = "https://github.com/rbignon/eldenring-menu-input-delay-fix"
 name = "MenuInputDelayFix"
 crate-type = ["cdylib", "rlib"]
 
+[build-dependencies]
+# Not gated on `cfg(windows)`: build-dependency cfgs match the host, and gating
+# on it would leave build.rs unchecked on Linux and skip resources when
+# cross-compiling. build.rs no-ops on non-Windows targets instead.
+winresource = "0.1.31"
+
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.62.0"
 features = [

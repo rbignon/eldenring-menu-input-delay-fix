@@ -43,6 +43,12 @@ the generic ML detections (e.g. `Trojan:Win32/Wacatac`) even more likely. If
 your antivirus quarantines the DLL, restore it and add an exclusion for your
 mods folder.
 
+Releases after v1.1.2 carry a version resource, so Windows can tell you what
+the file claims to be: right-click the DLL, Properties, Details shows the
+product name, version and copyright. That does not make the detection go away
+(the behavior above is what triggers it), but an anonymous DLL with no
+metadata at all is a worse starting point.
+
 If in doubt, do not trust the binary: the DLL is open source, every release
 binary comes from the public GitHub Actions workflow (the run is visible on
 the repository's Actions tab), and you can audit the source and build it
@@ -197,7 +203,8 @@ relevant Arxan code-restoration routine before writing.
 ## Build from source
 
 Requires the stable Rust toolchain with the MSVC target (the DLL builds on
-Windows only).
+Windows only). `build.rs` embeds the version resource with `rc.exe`, which
+ships with the Windows SDK that the MSVC build tools install.
 
 ```
 cargo build --lib --release

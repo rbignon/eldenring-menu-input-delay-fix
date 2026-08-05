@@ -45,6 +45,32 @@ jobs:
           VERSION=$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[0].version')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+      # build.rs embeds these; without them the DLL ships as an anonymous binary.
+      - name: Verify embedded version info
+        shell: pwsh
+        run: |
+          $info = (Get-Item target/release/MenuInputDelayFix.dll).VersionInfo
+          $info | Format-List CompanyName, FileDescription, FileVersion, ProductName, ProductVersion, LegalCopyright
+          if (-not $info.CompanyName) { throw "VERSIONINFO is missing from the DLL" }
+          if ($info.FileVersion -ne "${{ steps.version.outputs.version }}") {
+            throw "DLL version $($info.FileVersion) does not match Cargo.toml"
+          }
+
+      # The embedded manifest is the only part of the DLL the loader parses, so
+      # prove it still loads. Outside the game the scan finds no eldenring.exe
+      # module and the DLL logs that it is running unpatched.
+      - name: Smoke test the DLL loads
+        shell: pwsh
+        run: |
+          $dll = (Resolve-Path target/release/MenuInputDelayFix.dll).Path
+          $log = Join-Path (Split-Path $dll) MenuInputDelayFix.log
+          Remove-Item $log -ErrorAction SilentlyContinue
+          [System.Runtime.InteropServices.NativeLibrary]::Load($dll) | Out-Null
+          # DllMain hands the work to a thread, so the log lands asynchronously.
+          for ($i = 0; $i -lt 50 -and -not (Test-Path $log); $i++) { Start-Sleep -Milliseconds 100 }
+          if (-not (Test-Path $log)) { throw "the DLL loaded but never ran DllMain" }
+          Get-Content $log
+
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v4
         with:

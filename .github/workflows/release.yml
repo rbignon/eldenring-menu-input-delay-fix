@@ -28,6 +28,35 @@ jobs:
       - name: Build release DLL
         run: cargo build --lib --release
 
+      # Guards two failure modes at once: resources silently not embedded (the
+      # DLL then ships anonymous, which is what build.rs exists to prevent), and
+      # a tag that does not match the version in Cargo.toml.
+      - name: Verify embedded version info
+        shell: pwsh
+        run: |
+          $info = (Get-Item target/release/MenuInputDelayFix.dll).VersionInfo
+          $info | Format-List CompanyName, FileDescription, FileVersion, ProductName, ProductVersion, LegalCopyright
+          if (-not $info.CompanyName) { throw "VERSIONINFO is missing from the DLL" }
+          $tagged = $env:GITHUB_REF_NAME -replace '^v', ''
+          if ($info.FileVersion -ne $tagged) {
+            throw "tag $env:GITHUB_REF_NAME does not match the DLL version $($info.FileVersion); bump Cargo.toml"
+          }
+
+      # The embedded manifest is the only part of the DLL the loader parses, so
+      # prove it still loads. Outside the game the scan finds no eldenring.exe
+      # module and the DLL logs that it is running unpatched.
+      - name: Smoke test the DLL loads
+        shell: pwsh
+        run: |
+          $dll = (Resolve-Path target/release/MenuInputDelayFix.dll).Path
+          $log = Join-Path (Split-Path $dll) MenuInputDelayFix.log
+          Remove-Item $log -ErrorAction SilentlyContinue
+          [System.Runtime.InteropServices.NativeLibrary]::Load($dll) | Out-Null
+          # DllMain hands the work to a thread, so the log lands asynchronously.
+          for ($i = 0; $i -lt 50 -and -not (Test-Path $log); $i++) { Start-Sleep -Milliseconds 100 }
+          if (-not (Test-Path $log)) { throw "the DLL loaded but never ran DllMain" }
+          Get-Content $log
+
       # The zip and the bare DLL must come from this single build: two builds
       # of the same source produce different binaries (PE timestamp), and two
       # hashes in the wild for one version restart Defender reputation twice.
