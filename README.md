@@ -74,9 +74,10 @@ does not read it, and it has no effect on antivirus verdicts.
 
 ## Supported builds
 
-Validated in-game on **1.13** and **1.16.2**; the AOB also matches **1.12**
-statically. On a build without the delay (pre-1.12, ProductVersion 2.0.x) the
-signature does not match and the DLL does nothing, by design.
+Validated in-game on **1.13** and **1.16.2**; the AOB also matches **1.12**,
+**1.17.0** and **1.17.1** statically. On a build without the delay (pre-1.12,
+ProductVersion 2.0.x) the signature does not match and the DLL does nothing,
+by design.
 
 ## The mechanism (reverse-engineering writeup)
 
@@ -156,7 +157,7 @@ popups), and the menu id 0xb open path (conversation menus).
 mov  rax, rcx
 ret
 
-; 1.12+  (1.12 +78DDE0, 1.13 +78DFD0, 1.16.2 +78E0C0; identical bar the call disp)
+; 1.12+  (1.12 +78DDE0, 1.13 +78DFD0, 1.16.2 +78E0C0, 1.17.x +78EF40; identical bar the call disp)
 push rbx
 sub  rsp, 0x20
 mov  rbx, rcx                   ; self (window desc)
@@ -189,6 +190,8 @@ at 0, so the property machinery never feeds a non-zero value into a dialog.
 | 1.12 | 2.2.0.0 | `+78DDE0` | `+78DDEE` | `+E55C70` |
 | 1.13 | 2.3.0.0 | `+78DFD0` | `+78DFDE` | `+E56180` |
 | 1.16.2 | 2.6.2.0 | `+78E0C0` | `+78E0CE` | `+E56060` |
+| 1.17.0 | 2.7.0.0 | `+78EF40` | `+78EF4E` | `+E57E60` |
+| 1.17.1 | 2.7.1.0 | `+78EF40` | `+78EF4E` | `+E57ED0` |
 
 Other useful 1.13 anchors: `MessageBoxDialog` vtable `+2B03540`, slot2 override
 `+927C40`, shared slot2 impl `+78E0D0`, slot18 `+78DF40` (body at `+78DF78`).

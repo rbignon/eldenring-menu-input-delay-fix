@@ -19,7 +19,7 @@ pub type PatternByte = Option<u8>;
 /// (`sub rsp,0x20` / `add rsp,0x20`): those drift whenever the function's callers
 /// or callees change, which is the most likely future break (thanks to
 /// thefifthmatt for the review). Matches exactly one function on builds with the
-/// delay (1.12 / 1.13 / 1.16.2); zero on pre-1.12.
+/// delay (1.12 / 1.13 / 1.16.2 / 1.17.0 / 1.17.1); zero on pre-1.12.
 pub const SETTER_PATTERN: &[PatternByte] = &[
     Some(0xE8), // call <getter>
     None,
